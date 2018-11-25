@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\IncorrectResultSizeDataAccessException as IncorrectResultSizeDataAccessExceptionInterface;
+
+class IncorrectResultSizeDataAccessException
+extends DataRetrievalFailureException
+implements IncorrectResultSizeDataAccessExceptionInterface
+{}

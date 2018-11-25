@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\NonTransientDataAccessResourceException as NonTransientDataAccessResourceExceptionInterface;
+
+class NonTransientDataAccessResourceException
+extends NonTransientDataAccessException
+implements NonTransientDataAccessResourceExceptionInterface
+{}

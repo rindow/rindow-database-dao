@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\UncategorizedDataAccessException as UncategorizedDataAccessExceptionInterface;
+
+class UncategorizedDataAccessException
+extends NonTransientDataAccessException
+implements UncategorizedDataAccessExceptionInterface
+{}

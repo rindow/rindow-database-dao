@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\TransientDataAccessResourceException as TransientDataAccessResourceExceptionInterface;
+
+class TransientDataAccessResourceException
+extends TransientDataAccessException
+implements TransientDataAccessResourceExceptionInterface
+{}

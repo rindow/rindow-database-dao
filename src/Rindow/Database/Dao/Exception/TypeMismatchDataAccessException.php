@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\TypeMismatchDataAccessException as TypeMismatchDataAccessExceptionInterface;
+
+class TypeMismatchDataAccessException
+extends InvalidDataAccessResourceUsageException
+implements TypeMismatchDataAccessExceptionInterface
+{}

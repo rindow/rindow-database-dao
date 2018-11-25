@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\CleanupFailureDataAccessException as CleanupFailureDataAccessExceptionInterface;
+
+class CleanupFailureDataAccessException
+extends NonTransientDataAccessException
+implements CleanupFailureDataAccessExceptionInterface
+{}

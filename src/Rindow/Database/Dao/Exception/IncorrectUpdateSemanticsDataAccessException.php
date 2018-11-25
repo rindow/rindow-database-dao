@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\IncorrectUpdateSemanticsDataAccessException as IncorrectUpdateSemanticsDataAccessExceptionInterface;
+
+class IncorrectUpdateSemanticsDataAccessException
+extends InvalidDataAccessResourceUsageException
+implements IncorrectUpdateSemanticsDataAccessExceptionInterface
+{}

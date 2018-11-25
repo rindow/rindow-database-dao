@@ -1,0 +1,45 @@
+{
+    "name": "rindow/rindow-database-dao",
+    "type": "library",
+    "description": "Database and any data resources access",
+    "keywords": ["rindow","framework","dao"],
+    "license": "BSD-3-Clause",
+    "require": {
+        "php": ">=5.3.3",
+        "interop-phpobjects/lenient-dao": "*",
+        "rindow/rindow-stdlib": "*"
+    },
+    "require-dev": {
+        "interop-phpobjects/lenient-dao": "*",
+        "rindow/rindow-stdlib": "*",
+        "rindow/rindow-annotation": "*",
+        "rindow/rindow-container": "*",
+        "rindow/rindow-aop": "*",
+        "rindow/rindow-transaction": "*"
+    },
+    "suggest": {
+        "rindow/rindow-container": "It needs some service container",
+        "rindow/rindow-transaction": "When using transaction",
+        "rindow/rindow-database-pdo": "When using SQL databases",
+        "rindow/rindow-module-mongodb": "When using Mongodb etc.",
+        "rindow/rindow-module-stomp": "When using ActiveMQ etc."
+    },
+    "autoload": {
+        "psr-0": {
+            "Rindow\\Database\\Dao\\": "src/"
+        }
+    },
+
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://rindow.github.io/rindow-packagist/packages.json",
+            "options": {
+                "ssl": {
+                    "verify_peer": "true"
+                }
+            }
+        }
+    ],
+    "minimum-stability": "dev"
+}

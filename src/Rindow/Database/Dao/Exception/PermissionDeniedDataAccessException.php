@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\PermissionDeniedDataAccessException as PermissionDeniedDataAccessExceptionInterface;
+
+class PermissionDeniedDataAccessException
+extends NonTransientDataAccessException
+implements PermissionDeniedDataAccessExceptionInterface
+{}

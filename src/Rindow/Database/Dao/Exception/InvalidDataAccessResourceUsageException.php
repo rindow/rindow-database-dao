@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\InvalidDataAccessResourceUsageException as InvalidDataAccessResourceUsageExceptionInterface;
+
+class  InvalidDataAccessResourceUsageException
+extends NonTransientDataAccessException
+implements InvalidDataAccessResourceUsageExceptionInterface
+{}

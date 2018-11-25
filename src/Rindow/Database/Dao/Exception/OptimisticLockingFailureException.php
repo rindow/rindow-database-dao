@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\OptimisticLockingFailureException as OptimisticLockingFailureExceptionInterface;
+
+class OptimisticLockingFailureException
+extends ConcurrencyFailureException
+implements OptimisticLockingFailureExceptionInterface
+{}

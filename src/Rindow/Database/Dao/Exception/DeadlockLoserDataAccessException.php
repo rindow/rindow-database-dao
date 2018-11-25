@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\DeadlockLoserDataAccessException as DeadlockLoserDataAccessExceptionInterface;
+
+class DeadlockLoserDataAccessException
+extends PessimisticLockingFailureException
+implements DeadlockLoserDataAccessExceptionInterface
+{}

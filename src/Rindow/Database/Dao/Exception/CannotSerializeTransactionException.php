@@ -1,0 +1,9 @@
+<?php
+namespace Rindow\Database\Dao\Exception;
+
+use Interop\Lenient\Dao\Exception\CannotSerializeTransactionException as CannotSerializeTransactionExceptionInterface;
+
+class CannotSerializeTransactionException
+extends PessimisticLockingFailureException
+implements CannotSerializeTransactionExceptionInterface
+{}
