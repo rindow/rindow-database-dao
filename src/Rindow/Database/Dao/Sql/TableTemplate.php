@@ -244,7 +244,7 @@ class TableTemplate implements TableOperations
         if(!$lazy) {
             return $this->getConnection()->executeQuery($sql,$params,$fetchMode,$fetchClass);
         }
-        $lazyQuery = new lazyExecuteQuery($this->getDataSource());
+        $lazyQuery = new LazyExecuteQuery($this->getDataSource());
         return $lazyQuery->executeQuery($sql,$params,$fetchMode,$fetchClass);
     }
 
@@ -282,7 +282,7 @@ class TableTemplate implements TableOperations
     {
         if(!$lazy)
             return $this->getConnection()->executeQuery($sql,$params,$fetchMode,$fetchClass,$constructorArgs,$resultList);
-        $lazyQuery = new lazyExecuteQuery($this->getDataSource());
+        $lazyQuery = new LazyExecuteQuery($this->getDataSource());
         return $lazyQuery->executeQuery($sql,$params,$fetchMode,$fetchClass,$constructorArgs,$resultList);
     }
 
