@@ -21,10 +21,13 @@ class TestConnection implements Connection
 {
 	public $sql;
 	public $params;
+    public $cascadesql = array();
+    public $cascadeparams = array();
 	public $fetchClass;
 	public $driverName;
 	public $lastInsertId;
 	public $resultList;
+    public $cascadeResultList = array();
 	public $updateCount = 1;
 
 	public function __construct($resultList=null,$driverName=null,$lastInsertId=null)
@@ -34,26 +37,45 @@ class TestConnection implements Connection
 		$this->lastInsertId = $lastInsertId;
 	}
 
-	public function setData($data)
+	public function setData($data,$cascadeData=null)
 	{
 		$cursor = new TestCursor($data);
 		$this->resultList = new ResultList(array($cursor,'fetch'),array($cursor,'close'));
+        if($cascadeData) {
+            foreach ($cascadeData as $table => $data) {
+                $cursor = new TestCursor($data);
+        		$this->cascadeResultList[$table] = new ResultList(array($cursor,'fetch'),array($cursor,'close'));
+            }
+        }
 	}
 
     public function executeQuery($sql,array $params=null,
         $fetchMode=null,$fetchClass=null,array $constructorArgs=null,
         /* ResultList */ $resultList=null)
     {
-    	$this->sql = $sql;
-    	$this->params = $params;
+        if(strpos($sql,'cascadetable')===false) {
+            $this->sql = $sql;
+        	$this->params = $params;
+            $resultList = $this->resultList;
+        } else {
+            $this->cascadesql[] = $sql;
+        	$this->cascadeparams[] = $params;
+            preg_match('/cascadetable[A-Za-z0-9]*/',$sql,$matches);
+            $resultList = $this->cascadeResultList[$matches[0]];
+        }
     	$this->fetchClass = $fetchClass;
-    	return $this->resultList;
+    	return $resultList;
     }
 
     public function executeUpdate($sql,array $params=null)
     {
-    	$this->sql = $sql;
-    	$this->params = $params;
+        if(strpos($sql,'cascadetable')===false) {
+            $this->sql = $sql;
+        	$this->params = $params;
+        } else {
+            $this->cascadesql[] = $sql;
+        	$this->cascadeparams[] = $params;
+        }
     	return $this->updateCount;
     }
 
@@ -119,17 +141,54 @@ class TestDataMapper implements DataMapper
 {
 	public function map($data)
 	{
-		return (object)$data;
+        $newData = array();
+        foreach ($data as $key => $value) {
+            if($key=='b') {
+                $b = new \stdClass();
+                $b->value = $value;
+                $value = $b;
+            } elseif($key=='multivalue1') {
+                $values = $value;
+                $value = array();
+                foreach($values as $v) {
+                    $o = new \stdClass();
+                    $o->value = $v;
+                    $value[] = $o;
+                }
+            }
+            $newData[$key] = $value;
+        }
+		return (object)$newData;
 	}
 
 	public function demap($entity)
 	{
-		return get_object_vars($entity);
+		$entity = get_object_vars($entity);
+        $newEntity = array();
+        foreach ($entity as $key => $value) {
+            if($key=='multivalue1') {
+                $values = $value;
+                $value = array();
+                foreach ($values as $v) {
+                    $value[] = $v->value;
+                }
+            } else {
+                if(is_object($value)) {
+                    $value = $value->value;
+                }
+            }
+            $newEntity[$key] = $value;
+        }
+        return $newEntity;
 	}
 
 	public function fillId($entity,$id)
 	{
-		$entity->id = $id;
+        if(is_object($entity)) {
+            $entity->id = $id;
+        } elseif (is_array($entity)) {
+            $entity['id'] = $id;
+        }
 		return $entity;
 	}
 
@@ -154,7 +213,161 @@ class TestSqlRepository extends GenericSqlRepository
 
 	public function fillId($entity,$id)
 	{
-		$entity->id = $id;
+        if(is_object($entity)) {
+            $entity->id = $id;
+        } elseif (is_array($entity)) {
+            $entity[$this->keyName] = $id;
+        }
+		return $entity;
+	}
+
+	public function getFetchClass()
+	{
+		return null;
+	}
+}
+
+class TestCascadeSqlRepository extends GenericSqlRepository
+{
+	public function preMap($data)
+	{
+        $data = parent::preMap($data);
+        $data = $this->attachCascaedField($data,
+            'multivalue','cascadetable',
+            'masterid','value');
+        return $data;
+	}
+
+	public function postDemap($entity)
+	{
+        $entity = parent::postDemap($entity);
+        $entity = $this->detachCascaedField($entity,'multivalue');
+        return $entity;
+	}
+
+    protected function postCreate($entity)
+    {
+        parent::postCreate($entity);
+        $this->createCascadedField(
+            $entity,'multivalue','cascadetable','masterid','value');
+    }
+
+    protected function postUpdate($entity)
+    {
+        parent::postUpdate($entity);
+        $this->updateCascadedField(
+            $entity,'multivalue','cascadetable','masterid','value');
+    }
+
+    protected function preDelete($filter)
+    {
+        parent::preDelete($filter);
+        $this->deleteCascadedField($filter,'cascadetable','masterid');
+    }
+}
+
+class TestAutoCascadeSqlRepository extends GenericSqlRepository
+{
+    protected function cascadedFieldConfig()
+    {
+        $config = parent::cascadedFieldConfig();
+        array_push($config,array(
+                'property'=>'multivalue1',
+                'tableName'=>'cascadetable1',
+                'masterIdName'=>'masterid1',
+                'fieldName'=>'value1',
+        ));
+        return $config;
+    }
+}
+
+class TestSubAutoCascadeSqlRepository extends TestAutoCascadeSqlRepository
+{
+    protected function cascadedFieldConfig()
+    {
+        $config = parent::cascadedFieldConfig();
+        array_push($config,array(
+                'property'=>'multivalue2',
+                'tableName'=>'cascadetable2',
+                'masterIdName'=>'masterid2',
+                'fieldName'=>'value2',
+        ));
+        return $config;
+    }
+}
+
+class TestAutoCascadeWithSelfMapper extends GenericSqlRepository
+{
+    protected function cascadedFieldConfig()
+    {
+        $config = parent::cascadedFieldConfig();
+        array_push($config,array(
+                'property'=>'multivalue',
+                'tableName'=>'cascadetable',
+                'masterIdName'=>'masterid',
+                'fieldName'=>'value',
+        ));
+        return $config;
+    }
+
+    public function map($data)
+	{
+		return (object)$data;
+	}
+
+	public function demap($entity)
+	{
+		return get_object_vars($entity);
+	}
+
+	public function fillId($entity,$id)
+	{
+        if(is_object($entity)) {
+            $entity->id = $id;
+        } elseif (is_array($entity)) {
+            $entity[$this->keyName] = $id;
+        }
+		return $entity;
+	}
+
+	public function getFetchClass()
+	{
+		return null;
+	}
+}
+
+class TestAutoCascadeRawModeWithSelfMapper extends GenericSqlRepository
+{
+    protected function cascadedFieldConfig()
+    {
+        $config = parent::cascadedFieldConfig();
+        array_push($config,array(
+                'property'=>'multivalue',
+                'tableName'=>'cascadetable',
+                'masterIdName'=>'masterid',
+                'fieldName'=>'value',
+                'rawmode' => true,
+        ));
+        return $config;
+    }
+
+    public function map($data)
+	{
+		return (object)$data;
+	}
+
+	public function demap($entity)
+	{
+		return get_object_vars($entity);
+	}
+
+	public function fillId($entity,$id)
+	{
+        if(is_object($entity)) {
+            $entity->id = $id;
+        } elseif (is_array($entity)) {
+            $entity[$this->keyName] = $id;
+        }
 		return $entity;
 	}
 
@@ -363,24 +576,33 @@ class Test extends TestCase
 
 		$entity = new \stdClass();
 		$entity->a = 'a1';
+        $b = new \stdClass();
+        $b->value = 'b1';
+        $entity->b = $b;
 		$entity2 = $store->save($entity);
-		$this->assertEquals(array('a'=>'a1','id'=>10),get_object_vars($entity));
+		$this->assertEquals(array('a'=>'a1','b'=> $b,'id'=>10),get_object_vars($entity));
 		$this->assertEquals($entity,$entity2);
+        $this->assertEquals(array(':a'=>'a1',':b'=> 'b1'),$conn->params);
+        $this->assertEquals('INSERT INTO `foo` (`a`,`b`) VALUES (:a,:b);',$conn->sql);
 
 		$entity = new \stdClass();
 		$entity->id = 1;
 		$entity->field = 'boo';
+        $entity->b = $b;
 		$entity2 = $store->save($entity);
-		$this->assertEquals(array('id'=>1,'field'=>'boo'),get_object_vars($entity));
+		$this->assertEquals(array('id'=>1,'field'=>'boo','b'=> $b),get_object_vars($entity));
 		$this->assertEquals($entity,$entity2);
+        $this->assertEquals(array(':field'=>'boo',':b'=> 'b1',':id_0'=>1),$conn->params);
+        $this->assertEquals('UPDATE `foo` SET `field`=:field,`b`=:b WHERE id=:id_0',$conn->sql);
 
-		$conn->setData(array(array('id'=>1,'a'=>'a1')));
+		$conn->setData(array(array('id'=>1,'a'=>'a1','b'=>'b2')));
 		$results = $store->findAll();
 		$count=0;
 		foreach ($results as $entity) {
 			$r = new \stdClass();
 			$r->id = 1;
 			$r->a = 'a1';
+            $r->b = (object)array('value'=>'b2');
 			$this->assertEquals($r,$entity);
 			$count++;
 		}
@@ -415,6 +637,443 @@ class Test extends TestCase
 		}
 		$this->assertEquals(1,$count);
 	}
+
+        public function testCascadeSqlRepositoryOldMode()
+	{
+		list($store,$conn) = $this->getRepository('foo',__NAMESPACE__.'\\TestCascadeSqlRepository');
+
+        // create
+		$doc = $store->save(array('a'=>'a1','b'=>'b2','multivalue'=>array(1,2)));
+		$this->assertEquals("INSERT INTO `foo` (`a`,`b`) VALUES (:a,:b);",$conn->sql);
+        $this->assertEquals(array(
+            "INSERT INTO `cascadetable` (`masterid`,`value`) VALUES (:masterid,:value);",
+            "INSERT INTO `cascadetable` (`masterid`,`value`) VALUES (:masterid,:value);",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':a'=>'a1',':b'=>'b2'),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid'=>10,':value'=>1),
+            array(':masterid'=>10,':value'=>2),
+        ),$conn->cascadeparams);
+
+		$this->assertEquals(array('a'=>'a1','b'=>'b2','id'=>10,'multivalue'=>array(1,2)),$doc);
+
+        // find
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(array('id'=>10,'a'=>'a1')),array(
+            'cascadetable'=>array(
+                array('id'=>1,'masterid'=>10,'value'=>1),array('id'=>2,'masterid'=>10,'value'=>2)
+            )
+        ));
+        $doc = $store->findById(10);
+		$this->assertEquals("SELECT * FROM `foo` WHERE id=:id_0 LIMIT 1;",$conn->sql);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable` WHERE masterid=:masterid_0;",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid_0'=>10),
+        ),$conn->cascadeparams);
+		$this->assertEquals(array('id'=>10,'a'=>'a1','multivalue'=>array(1,2)),$doc);
+
+        // update
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(),array(
+            'cascadetable'=>array(
+                array('id'=>1,'masterid'=>10,'value'=>1),array('id'=>2,'masterid'=>10,'value'=>2)
+            )
+        ));
+        $doc = $store->save(array('id'=>10,'a'=>'a2','b'=>'b2','multivalue'=>array(3,4)));
+		$this->assertEquals("UPDATE `foo` SET `a`=:a,`b`=:b WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':a'=>'a2',':b'=>'b2',':id_0'=>10),$conn->params);
+		$this->assertEquals(array('id'=>10,'a'=>'a2','b'=>'b2','multivalue'=>array(3,4)),$doc);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable` WHERE masterid=:masterid_0;",
+            "DELETE FROM `cascadetable` WHERE masterid=:masterid_0 AND value=:value_1",
+            "DELETE FROM `cascadetable` WHERE masterid=:masterid_0 AND value=:value_1",
+            "INSERT INTO `cascadetable` (`value`,`masterid`) VALUES (:value,:masterid);",
+            "INSERT INTO `cascadetable` (`value`,`masterid`) VALUES (:value,:masterid);",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':masterid_0'=>10),
+            array(':masterid_0'=>10,':value_1'=>1),
+            array(':masterid_0'=>10,':value_1'=>2),
+            array(':masterid'=>10,':value'=>3),
+            array(':masterid'=>10,':value'=>4),
+        ),$conn->cascadeparams);
+
+        // delete
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $store->deleteById(10);
+		$this->assertEquals("DELETE FROM `foo` WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            "DELETE FROM cascadetable WHERE cascadetable.masterid IN (SELECT foo.id FROM foo WHERE foo.id = :id)",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':id'=>10),
+        ),$conn->cascadeparams);
+    }
+
+    public function testCascadedFieldConfig()
+	{
+		list($store,$conn) = $this->getRepository('foo',__NAMESPACE__.'\\TestSubAutoCascadeSqlRepository');
+
+        // create
+		$doc = $store->save(array('a'=>'a1','b'=>'b2','multivalue1'=>array(1,2),'multivalue2'=>array('A','B')));
+		$this->assertEquals("INSERT INTO `foo` (`a`,`b`) VALUES (:a,:b);",$conn->sql);
+        $this->assertEquals(array(
+            "INSERT INTO `cascadetable1` (`masterid1`,`value1`) VALUES (:masterid1,:value1);",
+            "INSERT INTO `cascadetable1` (`masterid1`,`value1`) VALUES (:masterid1,:value1);",
+            "INSERT INTO `cascadetable2` (`masterid2`,`value2`) VALUES (:masterid2,:value2);",
+            "INSERT INTO `cascadetable2` (`masterid2`,`value2`) VALUES (:masterid2,:value2);",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':a'=>'a1',':b'=>'b2'),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid1'=>10,':value1'=>1),
+            array(':masterid1'=>10,':value1'=>2),
+            array(':masterid2'=>10,':value2'=>'A'),
+            array(':masterid2'=>10,':value2'=>'B'),
+        ),$conn->cascadeparams);
+
+		$this->assertEquals(array('a'=>'a1','b'=>'b2','id'=>10,'multivalue1'=>array(1,2),'multivalue2'=>array('A','B')),$doc);
+
+        // find
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(array('id'=>10,'a'=>'a1','b'=>'b2')),array(
+            'cascadetable1'=>array(
+                array('id'=>1,'masterid1'=>10,'value1'=>1),array('id'=>2,'masterid1'=>10,'value1'=>2)
+            ),
+            'cascadetable2'=>array(
+                array('id'=>1,'masterid2'=>10,'value2'=>'A'),array('id'=>2,'masterid2'=>10,'value2'=>'B')
+            ),
+        ));
+        $doc = $store->findById(10);
+		$this->assertEquals("SELECT * FROM `foo` WHERE id=:id_0 LIMIT 1;",$conn->sql);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable1` WHERE masterid1=:masterid1_0;",
+            "SELECT * FROM `cascadetable2` WHERE masterid2=:masterid2_0;",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid1_0'=>10),
+            array(':masterid2_0'=>10),
+        ),$conn->cascadeparams);
+        $this->assertEquals(array('a'=>'a1','b'=>'b2','id'=>10,'multivalue1'=>array(1,2),'multivalue2'=>array('A','B')),$doc);
+
+        // update
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(),array(
+            'cascadetable1'=>array(
+                array('id'=>1,'masterid1'=>10,'value1'=>1),array('id'=>2,'masterid1'=>10,'value1'=>2),
+            ),
+            'cascadetable2'=>array(
+                array('id'=>1,'masterid2'=>10,'value2'=>'A'),array('id'=>2,'masterid2'=>10,'value2'=>'B'),
+            ),
+        ));
+
+        $doc = $store->save(array('id'=>10,'a'=>'a2','b'=>'b2','multivalue1'=>array(3,4),'multivalue2'=>array('C','D')));
+		$this->assertEquals("UPDATE `foo` SET `a`=:a,`b`=:b WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':a'=>'a2',':b'=>'b2',':id_0'=>10),$conn->params);
+		$this->assertEquals(array('id'=>10,'a'=>'a2','b'=>'b2','multivalue1'=>array(3,4),'multivalue2'=>array('C','D')),$doc);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable1` WHERE masterid1=:masterid1_0;",
+            "DELETE FROM `cascadetable1` WHERE masterid1=:masterid1_0 AND value1=:value1_1",
+            "DELETE FROM `cascadetable1` WHERE masterid1=:masterid1_0 AND value1=:value1_1",
+            "INSERT INTO `cascadetable1` (`value1`,`masterid1`) VALUES (:value1,:masterid1);",
+            "INSERT INTO `cascadetable1` (`value1`,`masterid1`) VALUES (:value1,:masterid1);",
+            "SELECT * FROM `cascadetable2` WHERE masterid2=:masterid2_0;",
+            "DELETE FROM `cascadetable2` WHERE masterid2=:masterid2_0 AND value2=:value2_1",
+            "DELETE FROM `cascadetable2` WHERE masterid2=:masterid2_0 AND value2=:value2_1",
+            "INSERT INTO `cascadetable2` (`value2`,`masterid2`) VALUES (:value2,:masterid2);",
+            "INSERT INTO `cascadetable2` (`value2`,`masterid2`) VALUES (:value2,:masterid2);",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':masterid1_0'=>10),
+            array(':masterid1_0'=>10,':value1_1'=>1),
+            array(':masterid1_0'=>10,':value1_1'=>2),
+            array(':masterid1'=>10,':value1'=>3),
+            array(':masterid1'=>10,':value1'=>4),
+            array(':masterid2_0'=>10),
+            array(':masterid2_0'=>10,':value2_1'=>'A'),
+            array(':masterid2_0'=>10,':value2_1'=>'B'),
+            array(':masterid2'=>10,':value2'=>'C'),
+            array(':masterid2'=>10,':value2'=>'D'),
+        ),$conn->cascadeparams);
+
+        // delete
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $store->deleteById(10);
+		$this->assertEquals("DELETE FROM `foo` WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            "DELETE FROM cascadetable1 WHERE cascadetable1.masterid1 IN (SELECT foo.id FROM foo WHERE foo.id = :id)",
+            "DELETE FROM cascadetable2 WHERE cascadetable2.masterid2 IN (SELECT foo.id FROM foo WHERE foo.id = :id)",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':id'=>10),
+            array(':id'=>10),
+        ),$conn->cascadeparams);
+    }
+
+    public function testCascadeWithDataMapper()
+	{
+		list($store,$conn) = $this->getRepository('foo',__NAMESPACE__.'\\TestAutoCascadeSqlRepository');
+        $store->setDataMapper(new TestDataMapper());
+
+        // create
+		$doc = $store->save((object)array('a'=>'a1','multivalue1'=>array((object)array('value'=>1),(object)array('value'=>2))));
+		$this->assertEquals("INSERT INTO `foo` (`a`) VALUES (:a);",$conn->sql);
+        $this->assertEquals(array(
+            "INSERT INTO `cascadetable1` (`masterid1`,`value1`) VALUES (:masterid1,:value1);",
+            "INSERT INTO `cascadetable1` (`masterid1`,`value1`) VALUES (:masterid1,:value1);",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':a'=>'a1'),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid1'=>10,':value1'=>1),
+            array(':masterid1'=>10,':value1'=>2),
+        ),$conn->cascadeparams);
+
+		$this->assertEquals((object)array('a'=>'a1','id'=>10,'multivalue1'=>array((object)array('value'=>1),(object)array('value'=>2))),$doc);
+
+        // find
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(array('id'=>10,'a'=>'a1')),array(
+            'cascadetable1'=>array(
+                array('id'=>1,'masterid1'=>10,'value1'=>1),array('id'=>2,'masterid1'=>10,'value1'=>2)
+            ),
+        ));
+        $doc = $store->findById(10);
+		$this->assertEquals("SELECT * FROM `foo` WHERE id=:id_0 LIMIT 1;",$conn->sql);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable1` WHERE masterid1=:masterid1_0;",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid1_0'=>10),
+        ),$conn->cascadeparams);
+        $this->assertEquals((object)array('a'=>'a1','id'=>10,
+            'multivalue1'=>array((object)array('value'=>1),(object)array('value'=>2))),$doc);
+
+        // update
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(),array(
+            'cascadetable1'=>array(
+                array('id'=>1,'masterid1'=>10,'value1'=>1),array('id'=>2,'masterid1'=>10,'value1'=>2)
+            )
+        ));
+        $doc = $store->save((object)array('id'=>10,'a'=>'a2','multivalue1'=>array((object)array('value'=>3),(object)array('value'=>4))));
+		$this->assertEquals("UPDATE `foo` SET `a`=:a WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':a'=>'a2',':id_0'=>10),$conn->params);
+		$this->assertEquals((object)array('id'=>10,'a'=>'a2','multivalue1'=>array((object)array('value'=>3),(object)array('value'=>4))),$doc);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable1` WHERE masterid1=:masterid1_0;",
+            "DELETE FROM `cascadetable1` WHERE masterid1=:masterid1_0 AND value1=:value1_1",
+            "DELETE FROM `cascadetable1` WHERE masterid1=:masterid1_0 AND value1=:value1_1",
+            "INSERT INTO `cascadetable1` (`value1`,`masterid1`) VALUES (:value1,:masterid1);",
+            "INSERT INTO `cascadetable1` (`value1`,`masterid1`) VALUES (:value1,:masterid1);",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':masterid1_0'=>10),
+            array(':masterid1_0'=>10,':value1_1'=>1),
+            array(':masterid1_0'=>10,':value1_1'=>2),
+            array(':masterid1'=>10,':value1'=>3),
+            array(':masterid1'=>10,':value1'=>4),
+        ),$conn->cascadeparams);
+
+        // delete
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $store->deleteById(10);
+		$this->assertEquals("DELETE FROM `foo` WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            "DELETE FROM cascadetable1 WHERE cascadetable1.masterid1 IN (SELECT foo.id FROM foo WHERE foo.id = :id)",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':id'=>10),
+        ),$conn->cascadeparams);
+    }
+
+    public function testCascadeWithSelfMapper()
+	{
+		list($store,$conn) = $this->getRepository('foo',__NAMESPACE__.'\\TestAutoCascadeWithSelfMapper');
+
+        // create
+		$doc = $store->save((object)array('a'=>'a1','multivalue'=>array(1,2)));
+		$this->assertEquals("INSERT INTO `foo` (`a`) VALUES (:a);",$conn->sql);
+        $this->assertEquals(array(
+            "INSERT INTO `cascadetable` (`masterid`,`value`) VALUES (:masterid,:value);",
+            "INSERT INTO `cascadetable` (`masterid`,`value`) VALUES (:masterid,:value);",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':a'=>'a1'),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid'=>10,':value'=>1),
+            array(':masterid'=>10,':value'=>2),
+        ),$conn->cascadeparams);
+
+		$this->assertEquals((object)array('a'=>'a1','id'=>10,'multivalue'=>array(1,2)),$doc);
+
+        // find
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(array('id'=>10,'a'=>'a1')),array(
+            'cascadetable'=>array(
+                array('id'=>1,'masterid'=>10,'value'=>1),array('id'=>2,'masterid'=>10,'value'=>2)
+            )
+        ));
+        $doc = $store->findById(10);
+		$this->assertEquals("SELECT * FROM `foo` WHERE id=:id_0 LIMIT 1;",$conn->sql);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable` WHERE masterid=:masterid_0;",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid_0'=>10),
+        ),$conn->cascadeparams);
+		$this->assertEquals((object)array('id'=>10,'a'=>'a1','multivalue'=>array(1,2)),$doc);
+
+        // update
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(),array(
+            'cascadetable'=>array(
+                array('id'=>1,'masterid'=>10,'value'=>1),array('id'=>2,'masterid'=>10,'value'=>2)
+            )
+        ));
+        $doc = $store->save((object)array('id'=>10,'a'=>'a2','multivalue'=>array(3,4)));
+		$this->assertEquals("UPDATE `foo` SET `a`=:a WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':a'=>'a2',':id_0'=>10),$conn->params);
+		$this->assertEquals((object)array('id'=>10,'a'=>'a2','multivalue'=>array(3,4)),$doc);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable` WHERE masterid=:masterid_0;",
+            "DELETE FROM `cascadetable` WHERE masterid=:masterid_0 AND value=:value_1",
+            "DELETE FROM `cascadetable` WHERE masterid=:masterid_0 AND value=:value_1",
+            "INSERT INTO `cascadetable` (`value`,`masterid`) VALUES (:value,:masterid);",
+            "INSERT INTO `cascadetable` (`value`,`masterid`) VALUES (:value,:masterid);",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':masterid_0'=>10),
+            array(':masterid_0'=>10,':value_1'=>1),
+            array(':masterid_0'=>10,':value_1'=>2),
+            array(':masterid'=>10,':value'=>3),
+            array(':masterid'=>10,':value'=>4),
+        ),$conn->cascadeparams);
+
+        // delete
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $store->delete($doc);
+		$this->assertEquals("DELETE FROM `foo` WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            "DELETE FROM cascadetable WHERE cascadetable.masterid IN (SELECT foo.id FROM foo WHERE foo.id = :id)",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':id'=>10),
+        ),$conn->cascadeparams);
+    }
+
+
+    public function testCascadeRawModeWithSelfMapper()
+	{
+		list($store,$conn) = $this->getRepository('foo',__NAMESPACE__.'\\TestAutoCascadeRawModeWithSelfMapper');
+
+        // create
+        $doc = $store->save((object)array('a'=>'a1','multivalue'=>array((object)array('value'=>1,'opt'=>10),(object)array('value'=>2,'opt'=>20))));
+		$this->assertEquals("INSERT INTO `foo` (`a`) VALUES (:a);",$conn->sql);
+        $this->assertEquals(array(
+            "INSERT INTO `cascadetable` (`value`,`opt`,`masterid`) VALUES (:value,:opt,:masterid);",
+            "INSERT INTO `cascadetable` (`value`,`opt`,`masterid`) VALUES (:value,:opt,:masterid);",
+        ),$conn->cascadesql);
+		$this->assertEquals(array(':a'=>'a1'),$conn->params);
+        $this->assertEquals(array(
+            array(':masterid'=>10,':value'=>1,':opt'=>10),
+            array(':masterid'=>10,':value'=>2,':opt'=>20),
+        ),$conn->cascadeparams);
+
+        $this->assertEquals((object)array('id'=>10,'a'=>'a1','multivalue'=>array((object)array('value'=>1,'opt'=>10),(object)array('value'=>2,'opt'=>20))),$doc);
+
+        // find
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(array('id'=>10,'a'=>'a1')),array(
+            'cascadetable'=>array(
+                array('id'=>1,'masterid'=>10,'value'=>1,'opt'=>10),array('id'=>2,'masterid'=>10,'value'=>2,'opt'=>20),
+            )
+        ));
+        $doc = $store->findById(10);
+		$this->assertEquals("SELECT * FROM `foo` WHERE id=:id_0 LIMIT 1;",$conn->sql);
+        $this->assertEquals(array(),$conn->cascadesql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(),$conn->cascadeparams);
+        $this->assertEquals(10,   $doc->id);
+        $this->assertEquals('a1', $doc->a);
+        $this->assertInstanceof('Rindow\Database\Dao\Sql\LazyExecuteQuery', $doc->multivalue);
+        $count=0;
+        foreach($doc->multivalue as $value) {
+            if($value['id']==1) {
+                $this->assertEquals(array('id'=>1,'masterid'=>10,'value'=>1,'opt'=>10),$value);
+            } elseif($value['id']==2) {
+                $this->assertEquals(array('id'=>2,'masterid'=>10,'value'=>2,'opt'=>20),$value);
+            }
+            $count++;
+        }
+        $this->assertEquals(2,$count);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable` WHERE masterid=:masterid_0;",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':masterid_0'=>10),
+        ),$conn->cascadeparams);
+
+        // update
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $conn->setData(array(),array(
+            'cascadetable'=>array(
+                array('id'=>1,'masterid'=>10,'value'=>1,'opt'=>10),array('id'=>2,'masterid'=>10,'value'=>2,'opt'=>20)
+            )
+        ));
+        $doc = $store->save((object)array('id'=>10,'a'=>'a2','multivalue'=>array((object)array('value'=>3,'opt'=>30),(object)array('value'=>4,'opt'=>40))));
+		$this->assertEquals("UPDATE `foo` SET `a`=:a WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':a'=>'a2',':id_0'=>10),$conn->params);
+        $this->assertEquals((object)array('id'=>10,'a'=>'a2','multivalue'=>array((object)array('value'=>3,'opt'=>30),(object)array('value'=>4,'opt'=>40))),$doc);
+        $this->assertEquals(array(
+            "SELECT * FROM `cascadetable` WHERE masterid=:masterid_0;",
+            "DELETE FROM `cascadetable` WHERE masterid=:masterid_0 AND value=:value_1",
+            "DELETE FROM `cascadetable` WHERE masterid=:masterid_0 AND value=:value_1",
+            "INSERT INTO `cascadetable` (`value`,`opt`,`masterid`) VALUES (:value,:opt,:masterid);",
+            "INSERT INTO `cascadetable` (`value`,`opt`,`masterid`) VALUES (:value,:opt,:masterid);",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':masterid_0'=>10),
+            array(':masterid_0'=>10,':value_1'=>1),
+            array(':masterid_0'=>10,':value_1'=>2),
+            array(':masterid'=>10,':value'=>3,':opt'=>30),
+            array(':masterid'=>10,':value'=>4,':opt'=>40),
+        ),$conn->cascadeparams);
+
+        // delete
+        $conn->cascadesql = array();
+        $conn->cascadeparams = array();
+        $store->delete($doc);
+		$this->assertEquals("DELETE FROM `foo` WHERE id=:id_0",$conn->sql);
+		$this->assertEquals(array(':id_0'=>10),$conn->params);
+        $this->assertEquals(array(
+            "DELETE FROM cascadetable WHERE cascadetable.masterid IN (SELECT foo.id FROM foo WHERE foo.id = :id)",
+        ),$conn->cascadesql);
+        $this->assertEquals(array(
+            array(':id'=>10),
+        ),$conn->cascadeparams);
+    }
 /*
 	public function testPreparedRepositoryFactory()
 	{
@@ -439,4 +1098,3 @@ class Test extends TestCase
 	}
 */
 }
-

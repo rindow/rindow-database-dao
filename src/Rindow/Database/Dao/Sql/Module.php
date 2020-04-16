@@ -6,6 +6,11 @@ class Module
     public function getConfig()
     {
         return array(
+            'module_manager' => array(
+                'filters' => array(
+                    'Rindow\\Database\\Dao\\Sql\\Module::filter' => true,
+                ),
+            ),
             'container' => array(
                 'aliases' => array(
                     //'Rindow\\Database\\Dao\\DefaultSqlDataSource' => 'your_sql_data_source',
@@ -43,7 +48,7 @@ class Module
                     'Rindow\\Database\\Dao\\Repository\\GenericSqlRepository' => true,
                 ),
                 'pointcuts' => array(
-                    'Rindow\\Database\\Dao\\Repository\\GenericSqlRepository'=> 
+                    'Rindow\\Database\\Dao\\Repository\\GenericSqlRepository'=>
                         'execution(Rindow\\Database\\Dao\\Repository\\GenericSqlRepository::'.
                             '(save|delete|deleteById)())',
                 ),
@@ -72,5 +77,57 @@ class Module
                 ),
             ),
         );
+    }
+
+    static public function filter($config)
+    {
+        if(isset($config['database']['repository']['GenericSqlRepository']['extends'])) {
+            $config = self::GenericSqlRepositoryFilter($config);
+        }
+        return $config;
+    }
+
+    static public function GenericSqlRepositoryFilter($config)
+    {
+        $repositories = $config['database']['repository']['GenericSqlRepository']['extends'];
+        foreach($repositories as $class => $switch) {
+            if(!$switch) {
+                continue;
+            }
+            $aopconfig = array(
+                'aop' => array(
+                    'intercept_to' => array(
+                        $class => true,
+                    ),
+                    'pointcuts' => array(
+                        $class =>
+                            'execution('.$class.'::'.
+                                '(save|findById|findAll|findOne|delete|deleteById|existsById|count)())',
+                    ),
+                    'aspectOptions' => array(
+                        'Rindow\\Database\\Sql\\DefaultDaoExceptionAdvisor' => array(
+                            'advices' => array(
+                                'afterThrowingAdvice' => array(
+                                    'pointcut_ref' => array(
+                                        $class=>true,
+                                    ),
+                                ),
+                            ),
+                        ),
+                        'Rindow\\Transaction\\DefaultTransactionAdvisor' => array(
+                            'advices' => array(
+                                'required' => array(
+                                    'pointcut_ref' => array(
+                                        $class => true,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            );
+            $config = array_replace_recursive($config,$aopconfig);
+        }
+        return $config;
     }
 }

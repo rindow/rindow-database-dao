@@ -15,6 +15,7 @@ class GenericSqlRepository implements CrudRepository,DataMapper
     protected $activeRepository = false;
     protected $fetchClassSupported;
     protected $transactionBoundary;
+    protected $compiledCascadedFieldConfig;
 
     public function __construct($tableOperations=null,$tableName=null,$keyName=null,$dataMapper=null)
     {
@@ -89,27 +90,6 @@ class GenericSqlRepository implements CrudRepository,DataMapper
         return $this->fetchClassSupported;
     }
 
-    public function getFetchClass()
-    {
-        return null;
-    }
-    
-    public function fillId($values,$id)
-    {
-        $values[$this->keyName] = $id;
-        return $values;
-    }
-
-    public function demap($entity)
-    {
-        return $entity;
-    }
-
-    public function map($entity)
-    {
-        return $entity;
-    }
-
     public function assertTableName()
     {
         if($this->tableName==null)
@@ -123,17 +103,15 @@ class GenericSqlRepository implements CrudRepository,DataMapper
 
     protected function makeDocument($entity)
     {
-        $entity = $this->demap($entity);
         if($this->dataMapper) {
-            $values = $this->dataMapper->demap($entity);
-            if(!is_array($values))
-                throw new Exception\InvalidArgumentException('mapped document must be array.');
-        } else {
+            $entity = $this->dataMapper->demap($entity);
             if(!is_array($entity))
-                throw new Exception\InvalidArgumentException('the entity must be array.');
-            $values = $entity;
+                throw new Exception\InvalidArgumentException('mapped document must be array.');
         }
-        return $values;
+        $document = $this->demap($entity);
+        if(!is_array($document))
+            throw new Exception\InvalidArgumentException('the entity must be array.');
+        return $document;
     }
 
     public function save($entity)
@@ -148,9 +126,11 @@ class GenericSqlRepository implements CrudRepository,DataMapper
     public function doSave($entity)
     {
         $this->assertTableName();
-        $values = $this->makeDocument($entity);
+        $document = $this->makeDocument($entity);
+
+        $values = $this->postDemap($document);
         if(isset($values[$this->keyName])) {
-            $this->preUpdate($entity);
+            $this->preUpdate($document);
             $modified = $this->update($values);
             if(!$modified) {
                 try {
@@ -160,16 +140,21 @@ class GenericSqlRepository implements CrudRepository,DataMapper
                         throw $e;
                 }
             }
-            $this->postUpdate($entity);
+            $this->postUpdate($document);
         } else {
-            $this->preCreate($entity);
+            $this->preCreate($document);
             $this->create($values);
             $id = $this->getLastInsertId();
-            if($this->dataMapper)
+            if($this->dataMapper) {
                 $entity = $this->dataMapper->fillId($entity,$id);
-            else
-                $entity =  $this->fillId($entity,$id);
-            $this->postCreate($entity);
+                if($document!==$entity)
+                    $document =  $this->fillId($document,$id);
+            } else {
+                $entity   =  $this->fillId($entity,$id);
+                if($document!==$entity)
+                    $document =  $this->fillId($document,$id);
+            }
+            $this->postCreate($document);
         }
         return $entity;
     }
@@ -191,11 +176,11 @@ class GenericSqlRepository implements CrudRepository,DataMapper
     public function delete($entity)
     {
         $this->assertTableName();
-        $values = $this->makeDocument($entity);
-        if(!isset($values[$this->keyName]))
+        $document = $this->makeDocument($entity);
+        if(!isset($document[$this->keyName]))
             throw new Exception\DomainException('No valid id fields found.');
-            
-        return $this->deleteById($values[$this->keyName]);
+
+        return $this->deleteById($document[$this->keyName]);
     }
 
     public function deleteById($id)
@@ -226,11 +211,14 @@ class GenericSqlRepository implements CrudRepository,DataMapper
 
     public function findAll(array $filter=null,array $sort=null,$limit=null,$offset=null)
     {
-        if(!$this->transactionBoundary)
-            return $this->doFindAll($filter,$sort,$limit,$offset);
-        return $this->transactionBoundary->required(function($manager,$filter,$sort,$limit,$offset){
-            return $manager->doFindAll($filter,$sort,$limit,$offset);
-        },array($this,$filter,$sort,$limit,$offset));
+        if(!$this->transactionBoundary) {
+            $results = $this->doFindAll($filter,$sort,$limit,$offset);
+            return $results;
+        } else {
+            return $this->transactionBoundary->required(function($manager,$filter,$sort,$limit,$offset){
+                return $manager->doFindAll($filter,$sort,$limit,$offset);
+            },array($this,$filter,$sort,$limit,$offset));
+        }
     }
 
     public function doFindAll(array $filter=null,array $sort=null,$limit=null,$offset=null)
@@ -244,9 +232,10 @@ class GenericSqlRepository implements CrudRepository,DataMapper
         if($fetchClass && !$this->isFetchClassSupported())
             throw new Exception\DomainException('The fetchClass ability is not supported.');
         $results = $this->doFindAllTableOperation($this->tableName,$filter,$sort,$limit,$offset,$fetchClass);
+        $results->addFilter(array($this,'preMap'));
+        $results->addFilter(array($this,'map'));
         if($this->dataMapper)
             $results->addFilter(array($this->dataMapper,'map'));
-        $results->addFilter(array($this,'map'));
         return $results;
     }
 
@@ -293,7 +282,14 @@ class GenericSqlRepository implements CrudRepository,DataMapper
         $masterId = $entity[$this->keyName];
         $tableOperations = $this->getTableOperations();
         foreach ($dataList as $data) {
-            $data = array($masterIdName=>$masterId,$fieldName=>$data);
+            if(is_scalar($data)) {
+                $data = array($masterIdName=>$masterId,$fieldName=>$data);
+            } elseif(is_array($data)) {
+                $data[$masterIdName] = $masterId;
+            } elseif(is_object($data)) {
+                $data = get_object_vars($data);
+                $data[$masterIdName] = $masterId;
+            }
             $tableOperations->insert($tableName,$data);
         }
     }
@@ -321,6 +317,20 @@ class GenericSqlRepository implements CrudRepository,DataMapper
             $dataList = $entity[$property];
         else
             $dataList = array();
+        $dataListNew = array();
+        $dataListRaw = array();
+        foreach ($dataList as $row) {
+            if(is_array($row)) {
+                $data = $row[$fieldName];
+            } elseif(is_object($row)) {
+                $data = $row->$fieldName;
+            } else {
+                $data = $row;
+            }
+            $dataListNew[] = $data;
+            $dataListRaw[] = $row;
+        }
+        $dataList = $dataListNew;
         $tableOperations = $this->getTableOperations();
         $cursor = $tableOperations->find(
             $tableName,
@@ -336,36 +346,163 @@ class GenericSqlRepository implements CrudRepository,DataMapper
             $tableOperations->delete($tableName,
                 array($masterIdName=>$entity[$this->keyName],$fieldName=>$data));
         }
-        foreach ($dataList as $data) {
-            if(!is_scalar($data)) {
-                $type = is_object($data) ? get_class($data) : gettype($data);
-                throw new Exception\DomainException('Illegal data type in "'.$fieldName.'": '.$type);
+        foreach ($dataListRaw as $data) {
+            if(is_array($data)) {
+                $row = $data;
+                $data = $data[$fieldName];
+            } elseif(is_object($data)) {
+                $row = get_object_vars($data);
+                $row[$masterIdName] = $entity[$this->keyName];
+                $data = $data->$fieldName;
+            } else {
+                $row = array($fieldName=>$data);
             }
-                
+            $row[$masterIdName] = $entity[$this->keyName];
             if(!isset($storedDataList[$data])) {
-                $tableOperations->insert($tableName,
-                    array($masterIdName=>$entity[$this->keyName],$fieldName=>$data));
+                $tableOperations->insert($tableName,$row);
             }
         }
+    }
+
+    protected function detachCascaedField($entity,$property)
+    {
+        unset($entity[$property]);
+        return $entity;
+    }
+
+    protected function attachCascaedField($data,$property,$tableName,$masterIdName,$fieldName,$rawmode=null)
+    {
+        if($rawmode) {
+            $cursor = $this->getTableOperations()->find($tableName,array($masterIdName=>$data[$this->keyName]),null,null,null,null,$lazy=true);
+            $data[$property] = $cursor;
+            return $data;
+        }
+        $cursor = $this->getTableOperations()->find($tableName,array($masterIdName=>$data[$this->keyName]));
+        $data[$property] = array();
+        foreach($cursor as $row) {
+            $data[$property][] = $row[$fieldName];
+        }
+        return $data;
+    }
+
+    protected function getCascadedFieldConfig()
+    {
+        if($this->compiledCascadedFieldConfig===null) {
+            $this->compiledCascadedFieldConfig =
+                $this->cascadedFieldConfig();
+        }
+        return $this->compiledCascadedFieldConfig;
+    }
+
+    public function getFetchClass()
+    {
+        return null;
+    }
+
+    public function fillId($values,$id)
+    {
+        $values[$this->keyName] = $id;
+        return $values;
+    }
+
+    public function demap($entity)
+    {
+        return $entity;
+    }
+
+    public function map($entity)
+    {
+        return $entity;
+    }
+
+    protected function cascadedFieldConfig()
+    {
+        // $config = parent::cascadedFieldConfig();
+        // array_push($config,
+        //    array(
+        //          'property'=>'cascadedFieldName',
+        //          'tableName'=>'externalTableName',
+        //          'masterIdName'=>'masterIdNameOnExternalTable',
+        //          'fieldName'=>'fieldNameOfcascatedDataOnExternalTable',
+        //    )
+        // );
+        // return $config;
+        return array();
+    }
+
+    protected function postDemap($entity)
+    {
+        $config = $this->getCascadedFieldConfig();
+        if(!empty($config)) {
+            foreach ($config as $info) {
+                $entity = $this->detachCascaedField($entity,$info['property']);
+            }
+        }
+        return $entity;
+    }
+
+    public function preMap($entity)
+    {
+        $config = $this->getCascadedFieldConfig();
+        if(!empty($config)) {
+            foreach ($config as $info) {
+                if(isset($info['rawmode'])&&$info['rawmode']) {
+                    $rawmode = true;
+                } else {
+                    $rawmode = false;
+                }
+                $entity = $this->attachCascaedField($entity,
+                    $info['property'],$info['tableName'],
+                    $info['masterIdName'],$info['fieldName'],
+                    $rawmode);
+            }
+        }
+        return $entity;
     }
 
     protected function preCreate($entity)
     {
     }
+
     protected function postCreate($entity)
     {
+        $config = $this->getCascadedFieldConfig();
+        if(!empty($config)) {
+            foreach ($config as $info) {
+                $this->createCascadedField($entity,
+                    $info['property'],$info['tableName'],
+                    $info['masterIdName'],$info['fieldName']);
+            }
+        }
     }
 
     protected function preUpdate($entity)
     {
     }
+
     protected function postUpdate($entity)
     {
+        $config = $this->getCascadedFieldConfig();
+        if(!empty($config)) {
+            foreach ($config as $info) {
+                $this->updateCascadedField($entity,
+                    $info['property'],$info['tableName'],
+                    $info['masterIdName'],$info['fieldName']);
+            }
+        }
     }
 
     protected function preDelete($filter)
     {
+        $config = $this->getCascadedFieldConfig();
+        if(!empty($config)) {
+            foreach ($config as $info) {
+                $this->deleteCascadedField($filter,
+                    $info['tableName'],$info['masterIdName']);
+            }
+        }
     }
+
     protected function postDelete($filter)
     {
     }

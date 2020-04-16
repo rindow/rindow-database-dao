@@ -10,6 +10,7 @@ use Rindow\Database\Dao\Exception\ExceptionInterface as DatabaseExceptionInterfa
 use Interop\Lenient\Transaction\ResourceManager;
 use Interop\Lenient\Dao\Resource\DataSource;
 use Interop\Lenient\Dao\Query\Cursor;
+use Rindow\Database\Dao\Repository\GenericSqlRepository;
 
 class TestLogger
 {
@@ -185,6 +186,10 @@ class TestCursor implements Cursor
     }
 }
 
+class TestSubClassRepository extends GenericSqlRepository
+{
+}
+
 class Test extends TestCase
 {
     public function setUp()
@@ -278,6 +283,69 @@ class Test extends TestCase
     {
     	$mm = new ModuleManager($this->getConfig());
     	$repository = $mm->getServiceLocator()->get(__NAMESPACE__.'\TestDbRepository');
+    	$entity = array('name'=>'test','day'=>'2015/01/01','ser'=>1);
+    	$repository->save($entity);
+    	$entity = array('name'=>'Duplicate','day'=>'2015/01/01','ser'=>1);
+    	$repository->save($entity);
+    }
+
+    /**
+     * @expectedException        Rindow\Database\Dao\Exception\DomainException
+     */
+    public function testSubClassRepositoryFailWithoutConfig()
+    {
+        $config = array(
+            'container' => array(
+                'components' => array(
+                    __NAMESPACE__.'\\TestSubClassRepository' => array(
+                        'parent'=>'Rindow\\Database\\Dao\\Repository\\AbstractSqlRepository',
+                        'class' => __NAMESPACE__.'\\TestSubClassRepository',
+                        'properties' => array(
+                            'tableName' => array('value' => 'testdb'),
+                        ),
+                    ),
+                ),
+            ),
+        );
+        $config = array_replace_recursive($config,$this->getConfig());
+        $mm = new ModuleManager($config);
+        $repository = $mm->getServiceLocator()->get(__NAMESPACE__.'\TestSubClassRepository');
+    	$entity = array('name'=>'test','day'=>'2015/01/01','ser'=>1);
+    	$repository->save($entity);
+    	$entity = array('name'=>'Duplicate','day'=>'2015/01/01','ser'=>1);
+    	$repository->save($entity);
+    }
+
+    /**
+     * @expectedException        Rindow\Database\Dao\Exception\DuplicateKeyException
+     */
+    public function testSubClassRepositoryWithConfig()
+    {
+        $config = array(
+            'container' => array(
+                'components' => array(
+                    __NAMESPACE__.'\\TestSubClassRepository' => array(
+                        'parent'=>'Rindow\\Database\\Dao\\Repository\\AbstractSqlRepository',
+                        'class' => __NAMESPACE__.'\\TestSubClassRepository',
+                        'properties' => array(
+                            'tableName' => array('value' => 'testdb'),
+                        ),
+                    ),
+                ),
+            ),
+            'database' => array(
+                'repository' => array(
+                    'GenericSqlRepository' => array(
+                        'extends' => array(
+                            __NAMESPACE__.'\\TestSubClassRepository' => true,
+                        ),
+                    ),
+                ),
+            ),
+        );
+        $config = array_replace_recursive($config,$this->getConfig());
+        $mm = new ModuleManager($config);
+        $repository = $mm->getServiceLocator()->get(__NAMESPACE__.'\TestSubClassRepository');
     	$entity = array('name'=>'test','day'=>'2015/01/01','ser'=>1);
     	$repository->save($entity);
     	$entity = array('name'=>'Duplicate','day'=>'2015/01/01','ser'=>1);
